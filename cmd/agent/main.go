@@ -92,10 +92,10 @@ func main() {
 			log.Printf("erreur lecture: temp=%v mailbox=%v", errT, errM)
 		} else {
 			ann := map[string]string{
-				annPrefix + "temp-celsius":   fmt.Sprintf("%.1f", temp),
-				annPrefix + "throttled":      fmt.Sprintf("0x%x", thr),
-				annPrefix + "throttled-now":  strconv.FormatBool(thr&0xF != 0),
-				annPrefix + "updated":        time.Now().UTC().Format(time.RFC3339),
+				annPrefix + "temp-celsius":  fmt.Sprintf("%.1f", temp),
+				annPrefix + "throttled":     fmt.Sprintf("0x%x", thr),
+				annPrefix + "throttled-now": strconv.FormatBool(thr&0xF != 0),
+				annPrefix + "updated":       time.Now().UTC().Format(time.RFC3339),
 			}
 			if *dryRun {
 				log.Printf("node=%q %v", node, ann)

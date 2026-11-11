@@ -8,4 +8,11 @@ layout:
 - go.kubebuilder.io/v4
 projectName: pi-thermal-operator
 repo: github.com/Tchoutcha/pi-thermal-operator
+resources:
+- controller: true
+  core: true
+  group: core
+  kind: Node
+  path: k8s.io/api/core/v1
+  version: v1
 version: "3"
