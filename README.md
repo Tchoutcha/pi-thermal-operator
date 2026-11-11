@@ -1,5 +1,9 @@
 # pi-thermal-operator
 
+[![Tests](https://github.com/Tchoutcha/pi-thermal-operator/actions/workflows/test.yml/badge.svg)](https://github.com/Tchoutcha/pi-thermal-operator/actions/workflows/test.yml)
+[![Lint](https://github.com/Tchoutcha/pi-thermal-operator/actions/workflows/lint.yml/badge.svg)](https://github.com/Tchoutcha/pi-thermal-operator/actions/workflows/lint.yml)
+[![E2E](https://github.com/Tchoutcha/pi-thermal-operator/actions/workflows/test-e2e.yml/badge.svg)](https://github.com/Tchoutcha/pi-thermal-operator/actions/workflows/test-e2e.yml)
+
 A Kubernetes operator that makes the scheduler **thermal-aware** on Raspberry Pi 5 clusters.
 Hot nodes get a `PreferNoSchedule` taint, so new pods prefer cooler nodes; the taint is removed
 once the node cools down.
