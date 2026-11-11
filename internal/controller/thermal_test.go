@@ -17,6 +17,13 @@ import (
 
 const testNode = "pi1"
 
+// Faux recorder : garde la liste des raisons d'événements émis
+type fakeRecorder struct{ reasons []string }
+
+func (f *fakeRecorder) Eventf(_ runtime.Object, _ runtime.Object, _, reason, _, _ string, _ ...any) {
+	f.reasons = append(f.reasons, reason)
+}
+
 func TestDecide(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -42,8 +49,7 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-// Faux cluster contenant les objets donnés (nœuds, politique...)
-func setup(t *testing.T, objs ...client.Object) (*NodeReconciler, client.Client) {
+func setup(t *testing.T, objs ...client.Object) (*NodeReconciler, client.Client, *fakeRecorder) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -53,7 +59,8 @@ func setup(t *testing.T, objs ...client.Object) (*NodeReconciler, client.Client)
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
-	return &NodeReconciler{Client: c, Scheme: scheme}, c
+	rec := &fakeRecorder{}
+	return &NodeReconciler{Client: c, Scheme: scheme, Recorder: rec}, c, rec
 }
 
 func reconcileNode(t *testing.T, r *NodeReconciler, c client.Client) *corev1.Node {
@@ -74,9 +81,9 @@ func nodeAt(temp string) *corev1.Node {
 		Name: testNode, Annotations: map[string]string{annTemp: temp}}}
 }
 
-// Sans politique : seuils par défaut (75 / 68)
+// Cycle complet + un événement à chaque changement
 func TestReconcileAddThenRemove(t *testing.T) {
-	r, c := setup(t, nodeAt("80"))
+	r, c, rec := setup(t, nodeAt("80"))
 
 	n := reconcileNode(t, r, c)
 	if !hasHotTaint(n) {
@@ -91,15 +98,27 @@ func TestReconcileAddThenRemove(t *testing.T) {
 	if hasHotTaint(n) {
 		t.Fatal("taint devrait être retiré à 60 °C")
 	}
+
+	if len(rec.reasons) != 2 || rec.reasons[0] != reasonAdded || rec.reasons[1] != reasonRemoved {
+		t.Fatalf("événements attendus [%s %s], obtenu %v", reasonAdded, reasonRemoved, rec.reasons)
+	}
 }
 
-// Avec une politique à 60 °C : un nœud à 65 °C est marqué (il ne le serait pas avec 75)
+// Pas de changement → pas d'événement (évite de spammer le cluster)
+func TestReconcileNoEventWhenNoChange(t *testing.T) {
+	r, c, rec := setup(t, nodeAt("50"))
+	reconcileNode(t, r, c)
+	if len(rec.reasons) != 0 {
+		t.Fatalf("aucun événement attendu, obtenu %v", rec.reasons)
+	}
+}
+
 func TestReconcileUsesPolicy(t *testing.T) {
 	policy := &thermalv1alpha1.ThermalPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: policyName},
 		Spec:       thermalv1alpha1.ThermalPolicySpec{HotCelsius: 60, CoolCelsius: 55},
 	}
-	r, c := setup(t, nodeAt("65"), policy)
+	r, c, _ := setup(t, nodeAt("65"), policy)
 
 	if n := reconcileNode(t, r, c); !hasHotTaint(n) {
 		t.Fatal("taint attendu : 65 °C >= seuil de la politique (60 °C)")
@@ -113,7 +132,7 @@ func TestReconcileKeepsOtherTaints(t *testing.T) {
 		other,
 		{Key: taintKey, Value: "true", Effect: corev1.TaintEffectPreferNoSchedule},
 	}
-	r, c := setup(t, node)
+	r, c, _ := setup(t, node)
 
 	n := reconcileNode(t, r, c)
 	if hasHotTaint(n) {
@@ -127,7 +146,7 @@ func TestReconcileKeepsOtherTaints(t *testing.T) {
 func TestReconcileIgnoresBadInput(t *testing.T) {
 	for _, ann := range []map[string]string{nil, {annTemp: "abc"}} {
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testNode, Annotations: ann}}
-		r, c := setup(t, node)
+		r, c, _ := setup(t, node)
 		if n := reconcileNode(t, r, c); len(n.Spec.Taints) != 0 {
 			t.Fatalf("aucun taint attendu, obtenu %v", n.Spec.Taints)
 		}

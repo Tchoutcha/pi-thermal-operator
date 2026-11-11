@@ -49,7 +49,7 @@ THERMAL_HOT_C=75 THERMAL_COOL_C=68 make run
 
 ## Roadmap
 - [x] `ThermalPolicy` CRD (configurable thresholds, validated by the API server)
-- [ ] Prometheus metrics and Kubernetes Events
+- [x] Prometheus metrics and Kubernetes Events
 - [ ] Unit and envtest tests, Helm chart, multi-arch CI
 - [ ] Experiment: throttling episodes and pod latency with vs without the operator
 
@@ -64,3 +64,19 @@ kubectl patch thermalpolicy default --type merge -p '{"spec":{"hotCelsius":75,"c
 kubectl get tp
 ```
 Without a policy, the controller falls back to 75 °C / 68 °C.
+
+## Observability
+Every taint change emits a Kubernetes Event on the node:
+```
+$ kubectl describe node pi-worker3
+Events:
+  Warning  ThermalTaintAdded  pi-thermal-operator  temperature 56.8 °C >= 55 °C: taint thermal.stellat.dev/hot added
+```
+
+Prometheus metrics exposed by the controller:
+
+| Metric | Type | Description |
+|---|---|---|
+| `pi_thermal_node_temperature_celsius{node}` | gauge | SoC temperature reported by the agent |
+| `pi_thermal_node_hot{node}` | gauge | 1 if the node has the thermal taint |
+| `pi_thermal_taint_changes_total{action}` | counter | taints `added` / `removed` |

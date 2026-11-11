@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -13,15 +14,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	thermalv1alpha1 "github.com/Tchoutcha/pi-thermal-operator/api/thermal/v1alpha1"
 )
 
 const (
-	annTemp    = "thermal.stellat.dev/temp-celsius"
-	taintKey   = "thermal.stellat.dev/hot"
-	policyName = "default"
+	annTemp       = "thermal.stellat.dev/temp-celsius"
+	taintKey      = "thermal.stellat.dev/hot"
+	policyName    = "default"
+	reasonAdded   = "ThermalTaintAdded"
+	reasonRemoved = "ThermalTaintRemoved"
 )
 
 // Seuils par défaut quand aucune ThermalPolicy n'existe
@@ -35,6 +39,34 @@ func envFloat(name string, def float64) float64 {
 		return v
 	}
 	return def
+}
+
+// ---- Métriques Prometheus (exposées sur /metrics du contrôleur) ----
+
+var (
+	nodeTemp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pi_thermal_node_temperature_celsius",
+		Help: "SoC temperature reported by the agent.",
+	}, []string{"node"})
+	nodeHot = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pi_thermal_node_hot",
+		Help: "1 if the node has the thermal taint, 0 otherwise.",
+	}, []string{"node"})
+	taintChanges = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "pi_thermal_taint_changes_total",
+		Help: "Number of thermal taints added or removed.",
+	}, []string{"action"})
+)
+
+func init() {
+	metrics.Registry.MustRegister(nodeTemp, nodeHot, taintChanges)
+}
+
+func boolToFloat(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // ---- Décision (logique pure) ----
@@ -68,13 +100,27 @@ func hasHotTaint(n *corev1.Node) bool {
 
 // ---- Contrôleur ----
 
+// eventRecorder : nouvelle API d'événements (events.k8s.io)
+type eventRecorder interface {
+	Eventf(regarding runtime.Object, related runtime.Object, eventtype, reason, action, note string, args ...any)
+}
+
 type NodeReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder eventRecorder
+}
+
+func (r *NodeReconciler) event(n *corev1.Node, eventtype, reason, note string, args ...any) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(n, nil, eventtype, reason, "Reconcile", note, args...)
+	}
 }
 
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=thermal.stellat.dev,resources=thermalpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // thresholds lit la ThermalPolicy "default", ou garde les valeurs par défaut.
 func (r *NodeReconciler) thresholds(ctx context.Context) (float64, float64, error) {
@@ -94,6 +140,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	var node corev1.Node
 	if err := r.Get(ctx, req.NamespacedName, &node); err != nil {
+		if apierrors.IsNotFound(err) { // nœud supprimé : on retire ses métriques
+			nodeTemp.DeleteLabelValues(req.Name)
+			nodeHot.DeleteLabelValues(req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -106,20 +156,26 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		log.Info("température illisible", "node", node.Name, "value", s)
 		return ctrl.Result{}, nil
 	}
+	nodeTemp.WithLabelValues(node.Name).Set(temp)
 
 	hot, cool, err := r.thresholds(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
+	hasTaint := hasHotTaint(&node)
+	act := decide(temp, hasTaint, hot, cool)
+	if act == noop {
+		nodeHot.WithLabelValues(node.Name).Set(boolToFloat(hasTaint))
+		return ctrl.Result{}, nil
+	}
+
 	orig := node.DeepCopy()
-	switch decide(temp, hasHotTaint(&node), hot, cool) {
-	case addTaint:
+	if act == addTaint {
 		node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
 			Key: taintKey, Value: "true", Effect: corev1.TaintEffectPreferNoSchedule,
 		})
-		log.Info("nœud trop chaud : taint ajouté", "node", node.Name, "temp", temp, "hot", hot)
-	case removeTaint:
+	} else {
 		var kept []corev1.Taint
 		for _, t := range node.Spec.Taints {
 			if t.Key != taintKey {
@@ -127,13 +183,26 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			}
 		}
 		node.Spec.Taints = kept
-		log.Info("nœud refroidi : taint retiré", "node", node.Name, "temp", temp, "cool", cool)
-	default:
-		return ctrl.Result{}, nil
 	}
 
-	err = r.Patch(ctx, &node, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
-	return ctrl.Result{}, err
+	if err := r.Patch(ctx, &node, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if act == addTaint {
+		nodeHot.WithLabelValues(node.Name).Set(1)
+		taintChanges.WithLabelValues("added").Inc()
+		log.Info("nœud trop chaud : taint ajouté", "node", node.Name, "temp", temp, "hot", hot)
+		r.event(&node, corev1.EventTypeWarning, reasonAdded,
+			"temperature %.1f °C >= %.0f °C: taint %s added", temp, hot, taintKey)
+	} else {
+		nodeHot.WithLabelValues(node.Name).Set(0)
+		taintChanges.WithLabelValues("removed").Inc()
+		log.Info("nœud refroidi : taint retiré", "node", node.Name, "temp", temp, "cool", cool)
+		r.event(&node, corev1.EventTypeNormal, reasonRemoved,
+			"temperature %.1f °C <= %.0f °C: taint %s removed", temp, cool, taintKey)
+	}
+	return ctrl.Result{}, nil
 }
 
 // allNodes : quand la politique change, tous les nœuds sont réévalués.
