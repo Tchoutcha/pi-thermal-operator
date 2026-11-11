@@ -17,10 +17,9 @@ const (
 	taintKey = "thermal.stellat.dev/hot"
 )
 
-// Seuils (modifiables par variables d'environnement pour les tests)
 var (
-	hotC  = envFloat("THERMAL_HOT_C", 75)  // au-dessus : taint
-	coolC = envFloat("THERMAL_COOL_C", 68) // en dessous : retrait du taint
+	hotC  = envFloat("THERMAL_HOT_C", 75)
+	coolC = envFloat("THERMAL_COOL_C", 68)
 )
 
 func envFloat(name string, def float64) float64 {
@@ -29,6 +28,37 @@ func envFloat(name string, def float64) float64 {
 	}
 	return def
 }
+
+// ---- Décision (logique pure, testée unitairement) ----
+
+type action int
+
+const (
+	noop action = iota
+	addTaint
+	removeTaint
+)
+
+func decide(temp float64, hasTaint bool, hot, cool float64) action {
+	switch {
+	case temp >= hot && !hasTaint:
+		return addTaint
+	case temp <= cool && hasTaint:
+		return removeTaint
+	}
+	return noop
+}
+
+func hasHotTaint(n *corev1.Node) bool {
+	for _, t := range n.Spec.Taints {
+		if t.Key == taintKey {
+			return true
+		}
+	}
+	return false
+}
+
+// ---- Contrôleur ----
 
 type NodeReconciler struct {
 	client.Client
@@ -47,7 +77,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	s, ok := node.Annotations[annTemp]
 	if !ok {
-		return ctrl.Result{}, nil // agent pas encore passé sur ce nœud
+		return ctrl.Result{}, nil
 	}
 	temp, err := strconv.ParseFloat(s, 64)
 	if err != nil {
@@ -55,22 +85,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	hasTaint := false
-	for _, t := range node.Spec.Taints {
-		if t.Key == taintKey {
-			hasTaint = true
-			break
-		}
-	}
-
 	orig := node.DeepCopy()
-	switch {
-	case temp >= hotC && !hasTaint:
+	switch decide(temp, hasHotTaint(&node), hotC, coolC) {
+	case addTaint:
 		node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
 			Key: taintKey, Value: "true", Effect: corev1.TaintEffectPreferNoSchedule,
 		})
 		log.Info("nœud trop chaud : taint ajouté", "node", node.Name, "temp", temp)
-	case temp <= coolC && hasTaint:
+	case removeTaint:
 		var kept []corev1.Taint
 		for _, t := range node.Spec.Taints {
 			if t.Key != taintKey {
@@ -80,11 +102,11 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		node.Spec.Taints = kept
 		log.Info("nœud refroidi : taint retiré", "node", node.Name, "temp", temp)
 	default:
-		return ctrl.Result{}, nil // rien à changer
+		return ctrl.Result{}, nil
 	}
 
 	err = r.Patch(ctx, &node, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
-	return ctrl.Result{}, err // en cas de conflit, Kubernetes relance automatiquement
+	return ctrl.Result{}, err
 }
 
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
