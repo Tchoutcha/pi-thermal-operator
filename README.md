@@ -50,7 +50,9 @@ THERMAL_HOT_C=75 THERMAL_COOL_C=68 make run
 ## Roadmap
 - [x] `ThermalPolicy` CRD (configurable thresholds, validated by the API server)
 - [x] Prometheus metrics and Kubernetes Events
-- [ ] Unit and envtest tests, Helm chart, multi-arch CI
+- [x] Unit tests and CI (tests, lint, e2e)
+- [x] Multi-arch images (arm64, amd64), in-cluster deployment with leader election
+- [ ] Helm chart
 - [ ] Experiment: throttling episodes and pod latency with vs without the operator
 
 ## Configure thresholds
@@ -80,3 +82,11 @@ Prometheus metrics exposed by the controller:
 | `pi_thermal_node_temperature_celsius{node}` | gauge | SoC temperature reported by the agent |
 | `pi_thermal_node_hot{node}` | gauge | 1 if the node has the thermal taint |
 | `pi_thermal_taint_changes_total{action}` | counter | taints `added` / `removed` |
+
+## Deploy in the cluster
+```bash
+kubectl apply -f config/agent/agent.yaml                                  # agent DaemonSet
+make deploy IMG=ghcr.io/tchoutcha/pi-thermal-operator:v0.2.0              # CRD, RBAC, controller
+kubectl apply -f config/samples/thermal_v1alpha1_thermalpolicy.yaml       # thresholds
+kubectl -n pi-thermal-operator-system get pods
+```
