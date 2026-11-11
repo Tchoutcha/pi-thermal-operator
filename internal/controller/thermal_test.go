@@ -13,6 +13,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+const testNode = "pi1"
+
 // Test 1 : la règle de décision, avec hystérésis
 func TestDecide(t *testing.T) {
 	cases := []struct {
@@ -50,9 +52,9 @@ func setup(t *testing.T, node *corev1.Node) (*NodeReconciler, client.Client) {
 	return &NodeReconciler{Client: c, Scheme: scheme}, c
 }
 
-func reconcileNode(t *testing.T, r *NodeReconciler, c client.Client, name string) *corev1.Node {
+func reconcileNode(t *testing.T, r *NodeReconciler, c client.Client) *corev1.Node {
 	t.Helper()
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: testNode}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -66,10 +68,10 @@ func reconcileNode(t *testing.T, r *NodeReconciler, c client.Client, name string
 // Test 2 : cycle complet chaud → taint → refroidi → retrait
 func TestReconcileAddThenRemove(t *testing.T) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
-		Name: "pi1", Annotations: map[string]string{annTemp: "80"}}}
+		Name: testNode, Annotations: map[string]string{annTemp: "80"}}}
 	r, c := setup(t, node)
 
-	n := reconcileNode(t, r, c, "pi1")
+	n := reconcileNode(t, r, c)
 	if !hasHotTaint(n) {
 		t.Fatal("taint attendu à 80 °C")
 	}
@@ -78,7 +80,7 @@ func TestReconcileAddThenRemove(t *testing.T) {
 	if err := c.Update(context.Background(), n); err != nil {
 		t.Fatal(err)
 	}
-	n = reconcileNode(t, r, c, "pi1")
+	n = reconcileNode(t, r, c)
 	if hasHotTaint(n) {
 		t.Fatal("taint devrait être retiré à 60 °C")
 	}
@@ -88,7 +90,7 @@ func TestReconcileAddThenRemove(t *testing.T) {
 func TestReconcileKeepsOtherTaints(t *testing.T) {
 	other := corev1.Taint{Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule}
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "pi1", Annotations: map[string]string{annTemp: "60"}},
+		ObjectMeta: metav1.ObjectMeta{Name: testNode, Annotations: map[string]string{annTemp: "60"}},
 		Spec: corev1.NodeSpec{Taints: []corev1.Taint{
 			other,
 			{Key: taintKey, Value: "true", Effect: corev1.TaintEffectPreferNoSchedule},
@@ -96,7 +98,7 @@ func TestReconcileKeepsOtherTaints(t *testing.T) {
 	}
 	r, c := setup(t, node)
 
-	n := reconcileNode(t, r, c, "pi1")
+	n := reconcileNode(t, r, c)
 	if hasHotTaint(n) {
 		t.Fatal("taint thermique devrait être retiré")
 	}
@@ -108,9 +110,9 @@ func TestReconcileKeepsOtherTaints(t *testing.T) {
 // Test 4 : annotation absente ou illisible → aucune erreur, rien ne change
 func TestReconcileIgnoresBadInput(t *testing.T) {
 	for _, ann := range []map[string]string{nil, {annTemp: "abc"}} {
-		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "pi1", Annotations: ann}}
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testNode, Annotations: ann}}
 		r, c := setup(t, node)
-		n := reconcileNode(t, r, c, "pi1")
+		n := reconcileNode(t, r, c)
 		if len(n.Spec.Taints) != 0 {
 			t.Fatalf("aucun taint attendu, obtenu %v", n.Spec.Taints)
 		}

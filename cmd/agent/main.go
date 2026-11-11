@@ -46,7 +46,7 @@ func readThrottled() (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var buf [8]uint32
 	buf[0] = uint32(len(buf) * 4) // taille totale
 	buf[1] = 0                    // requête
