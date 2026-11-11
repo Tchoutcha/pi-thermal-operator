@@ -14,3 +14,11 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - thermal.stellat.dev
+  resources:
+  - thermalpolicies
+  verbs:
+  - get
+  - list
+  - watch

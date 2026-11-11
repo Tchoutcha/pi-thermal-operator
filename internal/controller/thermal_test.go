@@ -11,11 +11,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	thermalv1alpha1 "github.com/Tchoutcha/pi-thermal-operator/api/thermal/v1alpha1"
 )
 
 const testNode = "pi1"
 
-// Test 1 : la règle de décision, avec hystérésis
 func TestDecide(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -41,14 +42,17 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-// Prépare un faux cluster contenant un seul nœud
-func setup(t *testing.T, node *corev1.Node) (*NodeReconciler, client.Client) {
+// Faux cluster contenant les objets donnés (nœuds, politique...)
+func setup(t *testing.T, objs ...client.Object) (*NodeReconciler, client.Client) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
+	if err := thermalv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 	return &NodeReconciler{Client: c, Scheme: scheme}, c
 }
 
@@ -65,11 +69,14 @@ func reconcileNode(t *testing.T, r *NodeReconciler, c client.Client) *corev1.Nod
 	return &n
 }
 
-// Test 2 : cycle complet chaud → taint → refroidi → retrait
+func nodeAt(temp string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name: testNode, Annotations: map[string]string{annTemp: temp}}}
+}
+
+// Sans politique : seuils par défaut (75 / 68)
 func TestReconcileAddThenRemove(t *testing.T) {
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
-		Name: testNode, Annotations: map[string]string{annTemp: "80"}}}
-	r, c := setup(t, node)
+	r, c := setup(t, nodeAt("80"))
 
 	n := reconcileNode(t, r, c)
 	if !hasHotTaint(n) {
@@ -86,15 +93,25 @@ func TestReconcileAddThenRemove(t *testing.T) {
 	}
 }
 
-// Test 3 : les autres taints du nœud ne sont jamais touchés
+// Avec une politique à 60 °C : un nœud à 65 °C est marqué (il ne le serait pas avec 75)
+func TestReconcileUsesPolicy(t *testing.T) {
+	policy := &thermalv1alpha1.ThermalPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: policyName},
+		Spec:       thermalv1alpha1.ThermalPolicySpec{HotCelsius: 60, CoolCelsius: 55},
+	}
+	r, c := setup(t, nodeAt("65"), policy)
+
+	if n := reconcileNode(t, r, c); !hasHotTaint(n) {
+		t.Fatal("taint attendu : 65 °C >= seuil de la politique (60 °C)")
+	}
+}
+
 func TestReconcileKeepsOtherTaints(t *testing.T) {
 	other := corev1.Taint{Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule}
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: testNode, Annotations: map[string]string{annTemp: "60"}},
-		Spec: corev1.NodeSpec{Taints: []corev1.Taint{
-			other,
-			{Key: taintKey, Value: "true", Effect: corev1.TaintEffectPreferNoSchedule},
-		}},
+	node := nodeAt("60")
+	node.Spec.Taints = []corev1.Taint{
+		other,
+		{Key: taintKey, Value: "true", Effect: corev1.TaintEffectPreferNoSchedule},
 	}
 	r, c := setup(t, node)
 
@@ -107,13 +124,11 @@ func TestReconcileKeepsOtherTaints(t *testing.T) {
 	}
 }
 
-// Test 4 : annotation absente ou illisible → aucune erreur, rien ne change
 func TestReconcileIgnoresBadInput(t *testing.T) {
 	for _, ann := range []map[string]string{nil, {annTemp: "abc"}} {
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testNode, Annotations: ann}}
 		r, c := setup(t, node)
-		n := reconcileNode(t, r, c)
-		if len(n.Spec.Taints) != 0 {
+		if n := reconcileNode(t, r, c); len(n.Spec.Taints) != 0 {
 			t.Fatalf("aucun taint attendu, obtenu %v", n.Spec.Taints)
 		}
 	}

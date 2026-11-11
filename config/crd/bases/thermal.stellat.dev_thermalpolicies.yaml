@@ -1,0 +1,80 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: thermalpolicies.thermal.stellat.dev
+spec:
+  group: thermal.stellat.dev
+  names:
+    kind: ThermalPolicy
+    listKind: ThermalPolicyList
+    plural: thermalpolicies
+    shortNames:
+    - tp
+    singular: thermalpolicy
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.hotCelsius
+      name: Hot
+      type: integer
+    - jsonPath: .spec.coolCelsius
+      name: Cool
+      type: integer
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ThermalPolicy is the Schema for the thermalpolicies API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ThermalPolicySpec defines the temperature thresholds used
+              to taint hot nodes.
+            properties:
+              coolCelsius:
+                default: 68
+                description: Nodes at or below this temperature lose the hot taint.
+                format: int32
+                maximum: 89
+                minimum: 20
+                type: integer
+              hotCelsius:
+                default: 75
+                description: Nodes at or above this temperature get the hot taint.
+                format: int32
+                maximum: 90
+                minimum: 30
+                type: integer
+            required:
+            - coolCelsius
+            - hotCelsius
+            type: object
+            x-kubernetes-validations:
+            - message: coolCelsius must be lower than hotCelsius
+              rule: self.coolCelsius < self.hotCelsius
+          status:
+            description: ThermalPolicyStatus defines the observed state of ThermalPolicy.
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

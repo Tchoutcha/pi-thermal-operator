@@ -1,0 +1,7 @@
+apiVersion: thermal.stellat.dev/v1alpha1
+kind: ThermalPolicy
+metadata:
+  name: default
+spec:
+  hotCelsius: 55
+  coolCelsius: 50

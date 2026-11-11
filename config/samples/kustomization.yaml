@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- thermal_v1alpha1_thermalpolicy.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

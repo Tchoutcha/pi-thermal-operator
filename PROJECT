@@ -6,6 +6,7 @@ cliVersion: 4.16.0
 domain: stellat.dev
 layout:
 - go.kubebuilder.io/v4
+multigroup: true
 projectName: pi-thermal-operator
 repo: github.com/Tchoutcha/pi-thermal-operator
 resources:
@@ -15,4 +16,11 @@ resources:
   kind: Node
   path: k8s.io/api/core/v1
   version: v1
+- api:
+    crdVersion: v1
+  domain: stellat.dev
+  group: thermal
+  kind: ThermalPolicy
+  path: github.com/Tchoutcha/pi-thermal-operator/api/thermal/v1alpha1
+  version: v1alpha1
 version: "3"

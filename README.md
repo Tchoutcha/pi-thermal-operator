@@ -48,7 +48,19 @@ THERMAL_HOT_C=75 THERMAL_COOL_C=68 make run
 - Taint added above the hot threshold, removed below the cool threshold, unchanged in between.
 
 ## Roadmap
-- [ ] `ThermalPolicy` CRD (configurable thresholds)
+- [x] `ThermalPolicy` CRD (configurable thresholds, validated by the API server)
 - [ ] Prometheus metrics and Kubernetes Events
 - [ ] Unit and envtest tests, Helm chart, multi-arch CI
 - [ ] Experiment: throttling episodes and pod latency with vs without the operator
+
+## Configure thresholds
+Thresholds live in a cluster-scoped `ThermalPolicy` named `default`. Changes apply immediately
+to all nodes, without restarting the controller. Invalid values are rejected by the API server.
+
+```bash
+make install   # install the CRD
+kubectl apply -f config/samples/thermal_v1alpha1_thermalpolicy.yaml
+kubectl patch thermalpolicy default --type merge -p '{"spec":{"hotCelsius":75,"coolCelsius":68}}'
+kubectl get tp
+```
+Without a policy, the controller falls back to 75 °C / 68 °C.
